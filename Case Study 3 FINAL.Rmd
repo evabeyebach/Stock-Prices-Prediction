@@ -1,0 +1,596 @@
+---
+title: "case-3"
+output: html_document
+date: "2024-03-19"
+---
+# Executive Summary
+
+# Problem Statement
+
+# Review of Related Literature
+
+
+
+
+```{r echo=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(car)
+library(tree)
+library(ISLR)
+library(lubridate)
+library(e1071)
+library(ROCR)
+library(caret)
+library(ModelMetrics)
+library(quantmod)
+```
+
+## R Markdown
+
+```{r}
+library(readr)
+dji <- read_csv("/Users/evabeyebach/Desktop/dow_jones_index.data")
+```
+
+# Data
+
+First, let's take a brief look at the data-set
+
+```{r}
+### Checking structure of Data
+str(dji)
+```
+```{r}
+# Summary of the data
+summary(dji)
+```
+There are a total of 750 observations and 16 individual variables. The data is a list of 30 stocks in the Dow Jones Industrial Index, with the open, high, low, and close price along with percent changes in price and volume metrics. The data also includes information on the dividend return of these stocks.
+
+## Data Cleaning
+
+The first step in cleaning the data is exploring the NA values. The number of NAs per variable is outlined below
+```{r}
+colSums(is.na(dji))
+```
+The variables `percent_change_volume_over_last_wk` and `previous_weeks_volume` both have 30 missing values each. However, it could be possible that this only happens during the first week the data was collected. This should be examined further:
+```{r}
+na_values <- dji[rowSums(is.na(dji)) >0,]
+```
+The data frame above contains the 30 rows with NA values. Let's take a closer look at the dates for these observations:
+```{r}
+na_values$date <- as.Date(na_values$date, "%m/%d/%Y")
+summary(na_values$date)
+```
+It appears like the NA values only happen during the first week the data was collected. We will change any NA with the mean of the values, for further analysis.
+
+```{r}
+dji = dji %>% 
+  group_by(stock) %>%
+  mutate(percent_change_volume_over_last_wk = ifelse(is.na(percent_change_volume_over_last_wk),
+                                                     mean(percent_change_volume_over_last_wk,
+                                                     na.rm=TRUE),
+                                                     percent_change_volume_over_last_wk),
+         previous_weeks_volume = ifelse(is.na(previous_weeks_volume),
+                                        mean(previous_weeks_volume, na.rm=TRUE), 
+                                        previous_weeks_volume)) %>% 
+  ungroup()
+```
+
+We will change some character variables to numeric in order to be able to see its maximum, minimum, etc. We will also convert to factor and date variables.
+But first, we have to delete the dollar sign.
+
+
+```{r}
+# Deleting dollar sign
+dji$open <- gsub("\\$", "", dji$open)
+dji$high <- gsub("\\$", "", dji$high)
+dji$low <- gsub("\\$", "", dji$low)
+dji$close <- gsub("\\$", "", dji$close)
+dji$next_weeks_open <- gsub("\\$", "", dji$next_weeks_open)
+dji$next_weeks_close <- gsub("\\$", "", dji$next_weeks_close)
+dji$date <- as.Date(dji$date, "%m/%d/%Y")
+
+#Changing variables to numeric
+dji$open<- as.numeric(dji$open)
+dji$high<- as.numeric(dji$high)
+dji$low<- as.numeric(dji$low)
+dji$close<- as.numeric(dji$close)
+dji$next_weeks_open<- as.numeric(dji$next_weeks_open)
+dji$next_weeks_close<- as.numeric(dji$next_weeks_close)
+dji$quarter <- as.factor(dji$quarter)
+dji$stock <- as.factor(dji$stock)
+```
+
+Here is what the data looks like now:
+```{r}
+# Summary of the data
+summary(dji)
+```
+
+For the date variable we will change it to weeks, that way it is easier to interpret.
+
+```{r}
+Week = strftime(dji$date, format = "%V")
+dji = cbind(Week, dji)
+dji$Week <- as.numeric(dji$Week)
+dji <- dji[order(dji$stock),]
+
+#change name of column
+```
+
+Now, we will create a copy and delete the next weeks formulas for the ML models.
+
+```{r data0}
+dji2 <- dji
+dji2 <- dji2[-c(13:14,16:17)] #Not using "next" columns
+```
+
+
+### Visualization 
+
+Now that the data is cleaned, it is important to visualize and explore the data on a deeper level. First, a plot will be created that shows the change of each stock's price throughout the timeline of the data:
+
+```{r data0}
+ggplot(dji, aes(x= date, y = percent_change_next_weeks_price, colour = stock)) +
+  geom_line() + theme_bw() + labs(title = "Per Price Change Next Week", x = "Date", y= "quarterly Returns", subtitle = "") +
+  scale_x_date(breaks = seq(as.Date("2011-01-07"), as.Date("2011-06-24"), by = "week"), minor_breaks = NULL) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+Overall, all the stocks exhibit similar movements between 2011-01-07 and 2011-06-24. Obviously, there are rises and declines in each stock that may not completely imitate the others, but there is a large number of stocks that ended higher in the 5% - 10% change in the next week's price.
+
+Dividends are extremely enticing to investors. Analyzing the dividend paid by various companies is a crucial factor when investing in a company, especially if the investor is interested more on receiving steady income from his/her investments. Let's take a look at the average `percent_return_next_dividend` for each company and see which stand out.
+
+```{r}
+avg_div <- aggregate(dji$percent_return_next_dividend, list(dji$stock), FUN=mean)
+avg_div <- setNames(avg_div,
+                 c("Stock","Return % on Next Divident"))
+summary(avg_div)
+
+```
+It appears like the average % Return on Dividends for this stock is 0.69%. Let's see which stocks outperform this average and which under perform:
+```{r}
+above_avg <- avg_div[avg_div$`Return % on Next Divident` >0.69,]
+print(paste(above_avg$Stock))
+```
+These companies' Dividend Return outperforms the mean of the 30 companies found in the data set. If an investor wishes to maximize their cashflows from dividends, these stocks could potentially continue delivering high dividend returns.
+
+Now for the under performers:
+```{r}
+below_avg <- avg_div[avg_div$`Return % on Next Divident`<=0.69,]
+print(paste((below_avg$Stock)))
+```
+These companies' dividend returns are not on par with the average of the 30 companies. Investors seeking steady cash flows could consider looking elsewhere to match the mean return.
+
+Let's perform a similar analysis as above but now on `percent_change_price`. This variable could be a good indicator of where the stock could be heading next week, which is what the models will attempt to predict.
+```{r}
+avg_chg <- aggregate(dji$percent_change_price, list(dji$stock), FUN=mean)
+avg_chg <- setNames(avg_chg,
+                 c("Stock","% Change in Price During Week"))
+summary(avg_chg)
+
+```
+On average, the 30 stocks rose about 0.05%. Obviously, this information is very vague, so let's separate the stocks that beat the mean and the stocks that did not.
+```{r}
+above_avg <- avg_chg[avg_chg$`% Change in Price During Week` >0.05026,]
+print(paste(above_avg$Stock))
+```
+The stocks above grew faster than the mean of 0.05%. Even though there are a lot of factors that could go into this, it would be interesting if these companies grew just as fast the next weeks!
+
+Now for the under performers:
+```{r}
+below_avg <- avg_chg[avg_chg$`% Change in Price During Week`<=0.05026,]
+print(paste((below_avg$Stock)))
+```
+These are the stocks that did not grow faster than the average of 0.05%.
+
+A correlation plot between all the numeric variables is important to look at the relationship between variables that will be fed into the models
+
+```{r}
+corrplot(cor(dji[,(5:13)]),method = "circle", type="upper", order="alphabet", tl.cex = 0.6)
+```
+There are a lot of very highly correlated variables in the data-set. It looks like `close`,`high`,`open`,`low`, and `next_weeks_open`have a near perfect correlation with each other. This makes sense considering that stocks will usually increase or decrease close to each of these values. For this reason, multi-collinearity must be considered as a potential issue in the models.
+
+### Analyzing lagged plots
+
+Now, we will plot lagged variables to see if they have autocorrelation, wich would ndicate that past values can predict future values, which is something we aim for this analysis.
+
+```{r}
+lag.plot(dji2$open, pch = ".", set.lags = 1:4)
+```
+
+
+```{r}
+lag.plot(dji2$volume, pch = ".", set.lags = 1:4)
+```
+
+
+
+```{r}
+lag.plot(dji2$percent_change_volume_over_last_wk, pch = ".", set.lags = 1:4)
+```
+```{r}
+lag.plot(dji2$percent_change_next_weeks_price, pch = ".", set.lags = 1:4)
+```
+
+From the graphs we can see that the variable with the best autocorrelation is open (high and close have same graphs), since it almost fits the line. Other variables don't have as good autocorrelation, as we can see that the dots are randomly plotted in the graph. Since `percent_change_next_weeks_price` has no autocorrelation and it is our Y variable, we will not add any lagged variables. 
+
+```{r}
+dji_train <- subset(dji2, quarter == 1)
+dji_test <- subset(dji2, quarter == 2)
+```
+
+## Linear Regression
+
+We will first run a linear regression with `percent_change_next_weeks_price` as our dependent variable. Then we will do vif() and get the only interested variables. After that we will know which variables to use and will do more modelling, but with loops.
+
+
+```{r}
+lm1 = lm(percent_change_next_weeks_price ~ stock + Week + open + high + low + close + volume + percent_change_price + percent_change_volume_over_last_wk + previous_weeks_volume, data = dji_train) 
+summary(lm1)
+```
+Most of the variables seems significant. Now we will look for multicolinearirty to delete variables with high correlation. 
+
+```{r}
+vif(lm1)
+```
+
+
+```{r}
+lm2 = lm(percent_change_next_weeks_price ~ stock + Week + open + high + low + volume + percent_change_price + percent_change_volume_over_last_wk + previous_weeks_volume, data = dji_train) 
+
+vif(lm2)
+```
+
+```{r}
+lm3 = lm(percent_change_next_weeks_price ~ Week + open + high + low + volume + percent_change_price + percent_change_volume_over_last_wk + previous_weeks_volume, data = dji_train) 
+
+vif(lm3)
+```
+
+```{r}
+lm4 = lm(percent_change_next_weeks_price ~ Week + high + low + volume + percent_change_price + percent_change_volume_over_last_wk + previous_weeks_volume, data = dji_train)  
+
+vif(lm4)
+```
+```{r}
+lm5 = lm(percent_change_next_weeks_price ~ Week + high + volume + percent_change_price + percent_change_volume_over_last_wk + previous_weeks_volume, data = dji_train) 
+
+vif(lm5)
+```
+
+```{r}
+lm6 = lm(percent_change_next_weeks_price ~ Week + high + percent_change_price + percent_change_volume_over_last_wk + volume, data = dji_train) 
+
+summary(lm6)
+
+vif(lm6)
+```
+
+
+These are the variables that we are going to use fo our models.
+Let's start with linear regression:
+
+```{r}
+
+stocks = (unique(dji_train$stock)) 
+dates = unique(dji_test$date)
+lm_predictions = data.frame(matrix(NA, ncol = 30, nrow = 13)) # df to store prediction of 30 stocks, 13 weeks
+rmse <- rep(NA, length(stocks))
+lm_pred_metrics <- data.frame(stocks, rmse)
+
+colnames(lm_predictions)= stocks
+
+for(i in 1:length(stocks)){
+  
+  stock_train = subset(dji_train, stock == stocks[i])      # train set for each stocks
+  stock_test = subset(dji_test, stock == stocks[i])        # test set for each stocks
+  
+  lm_fit = lm(percent_change_next_weeks_price ~ Week + high + percent_change_price + percent_change_volume_over_last_wk + volume, data = stock_train) 
+  
+  lm_preds <-  predict(lm_fit, stock_test)                          # make predictions
+  lm_predictions[i] <- lm_preds    # store predictions for each week for each stocks
+  
+  lm_rmse <- rmse(stock_test$percent_change_next_weeks_price, lm_preds)
+  lm_pred_metrics[i, "rmse"] <- lm_rmse
+                                  
+}
+
+lm_predictions = data.frame(dates,lm_predictions)
+print(lm_predictions)
+```
+### rmse value 
+
+```{r}
+lm_rmse_value <- sqrt(mean((stock_test$percent_change_next_weeks_price - lm_preds)^2))# compute errors
+print(lm_rmse_value)
+```
+```{r}
+print(paste("The RMSE value for the lm model is:", round(lm_rmse_value,2)))
+```
+
+
+
+# SVM Model
+
+A Support Vector Machine (SVM) is a type of supervised classification model that aims to separate the data through a hyper-plane. This model is great for classification of a binary variable, since there are two different groups in this data: purchasers and non-purchasers. The SVM model uses support vectors, data points closest to the hyper-plane, to actually define the hyper-plane and separate the data. The closer a data point is to the support vector, the better the data can be separated and classified. 
+
+The following SVM model will be run to see how accurately it can predict `percent_change_next_weeks_price`. The accuracy will be analyzed through its RMSE value and compared to the RMSE value of the other models.
+
+First, some minor data preparation must be performed to the data.
+
+```{r}
+stocks <- unique(dji_train$stock)
+rmse <- rep(NA, length(stocks))
+svm_pred <- data.frame(stocks, rmse)
+```
+```{r}
+svm_pred_metrics <- data.frame(stocks, rmse)                        # df to store metrics
+
+svm_predictions = data.frame(matrix(NA, ncol = 30, nrow = 13))      # df to store prediction of 30 stocks,                                                                       13 weeks
+colnames(svm_predictions)= stocks
+```
+
+Since the Dow Jones Index is composed of many stocks, and this data-set has 30 individual tickers, one model cannot be run. Instead, 30 models for each ticker must be executed and the results compared. To facilitate this, a for loop must be created that will run the model for each individual ticker and compute its MSE value. After that, a new data frame called svm_pred_metrics will compile each ticker's RMSE and finally compute the overall MSE for the SVM model.
+```{r}
+for(i in 1:length(stocks)){
+  
+  stock_train = subset(dji_train, stock == stocks[i])              
+  stock_test = subset(dji_test, stock == stocks[i])                
+  set.seed(1)
+                                                                 
+  tuned <- tune.svm(percent_change_next_weeks_price ~ Week + high + percent_change_price + percent_change_volume_over_last_wk + volume, 
+                    data = stock_train,  gamma = seq(0.1, 1, by = 0.1), 
+                    cost = seq(0.1,1, by = 0.1), scale=TRUE)
+  
+  svm_fit <- svm(percent_change_next_weeks_price ~ Week + high + percent_change_price + percent_change_volume_over_last_wk + volume, 
+                   data = stock_train,  gamma = tuned$best.parameters$gamma,
+                   cost = tuned$best.parameters$cost, scale=TRUE) 
+
+  svm_preds <- predict(svm_fit, stock_test)                  
+  svm_predictions[i] <- svm_preds                    
+  
+  svm_rmse <- rmse(stock_test$percent_change_next_weeks_price, svm_preds)    
+  svm_pred_metrics[i, "rmse"] <- svm_rmse
+  }
+```
+```{r}
+print(paste("The RMSE value for the SVM model is:", round(svm_rmse,2)))
+```
+
+The SVM model RMSE of 3.38 should be compared to the RMSE value of the Linear Regression:
+```{r}
+rmse_values <- c(lm_rmse=lm_rmse_value, svm_rmse=svm_rmse)
+rmse_values
+```
+
+Overall the Linear Model RMSE is lower by about 0.10. Even though this is a small difference, the linear model is statistically better at predicting `percent_change_next_weeks_price` than the SVM model.
+
+## Decision Tree
+
+Decision Tree models are a non-parametric machine learning model that can be used for both classification and regression. The DT starts with a root node that splits offs into decision nodes based on an answer to a question. From there, more decision nodes are created based on the answers to previous questions. Eventually the DT predicts or classifies each data point and no more decision nodes are created.
+
+The following DT will predict `percent_change_next_weeks_price`
+
+```{r}
+stocks = (unique(dji_train$stock)) 
+dates = unique(dji_test$date)
+
+dt_rmse = rep(NA, length(stocks))
+Preds <- rep(NA, length(stocks))
+
+dt_predictions = data.frame(matrix(NA, ncol = 30, nrow = 13)) # df to store prediction of 30 stocks, 13 weeks
+
+colnames(dt_predictions)= stocks
+dt_pred_metrics = data.frame(Stock = stocks,  dt_rmse = dt_rmse)           # df to store metrics
+
+
+for(i in 1:length(stocks)){
+
+  stock_train = subset(dji_train, stock == stocks[i])              # train set for each stocks
+  stock_test = subset(dji_test, stock == stocks[i])                # test set for each stocks
+                                                                    # fit decision tree for each stocks 
+  dt_model = tree(percent_change_next_weeks_price ~ Week + high + percent_change_price + percent_change_volume_over_last_wk + volume, data = stock_train)  
+
+  dt_preds = predict(dt_model, newdata = stock_test)                    # make predictions
+  dt_predictions[i] <- dt_preds
+  
+  dt_rmse = rmse(stock_test$percent_change_next_weeks_price, dt_preds)  # compute errors
+  dt_pred_metrics[i, "dt_rmse"] = dt_rmse                                  # store rmse
+}
+
+dt_predictions = data.frame(dates, dt_predictions)
+print(dt_predictions)
+print(dt_pred_metrics)
+plot(dt_model)
+text(dt_model, pretty = 0, cex = 1.1)
+```
+```{r}
+print(paste("The RMSE value for the Tree model is:", round(dt_rmse,2)))
+```
+
+The Decision Tree produced an RMSE of 3.47. Let's compare it against the Linear Regression and SVM Models:
+```{r}
+all_mses <- data.frame(svm_rmse)
+all_mses$lm_rmse <- round(lm_rmse,2)
+all_mses$dt_rmse <- round(dt_rmse,2)
+all_mses
+```
+Compared to the other two models, the Decision Tree was by far the worst predictor of the `percent_change_next_weeks_price`, 0.18 lower than the Linear Regression and 0.09 lower than the SVM model.
+
+# CAPM
+
+Now that all 3 models have been executed, the CAPM model will be constructed to determine the beta of each stock and compare it against the broader group of stocks. 
+
+
+```{r}
+stock_rmse <- dt_pred_metrics
+stock_rmse$svm_rmse <- svm_pred_metrics$rmse
+stock_rmse$lm_rmse <- lm_pred_metrics$rmse
+stock_rmse
+```
+
+The SVM model will be used to compute the beta and the returns, since the results of this model are the most comprehensive and have very good accuracy compared to the other 2 models
+
+```{r}
+dowj <- aggregate(dji_test$close, by = list(dji_test$date), FUN = function(x) sum(x)/0.132)   
+return_dow <- na.omit(Delt(dowj[,2]))
+
+return_stocks <- data.frame(matrix(0.0, ncol = 30, nrow = 12))                        # df to store return
+colnames(return_stocks) = c("AA", "AXP", "BA", "BAC", "CAT", "CSCO", "CVX", "DD", 
+                            "DIS", "GE", "HD", "HPQ", "IBM", "INTC", "JNJ", "JPM", 
+                            "KRFT", "KO", "MCD", "MMM", "MRK", "MSFT", "PFE", "PG", 
+                            "T", "TRV", "UTX", "VZ", "WMT", "XOM")
+
+all_Stocks =svm_predictions %>% pivot_longer(cols = 1:30,         # represent prediction in long format
+                      names_to = "stock", values_to = "return")
+
+for(i in 1:length(stocks)){                                       # compute returns 
+  
+  dow.sub = subset(dji_test, stock == stocks[i])
+  return_stocks[i] = na.omit(Delt(dow.sub$close)) 
+}
+
+return_stocks <- data.frame(return_stocks, return_dow) %>% 
+  rename(DOW = Delt.1.arithmetic)              # compute average returns for each stock.  
+returns_stk = t(return_stocks[,-31] %>% summarise(across(where(is.numeric), mean)))
+colnames(returns_stk) = "return"
+returns_stk= as.data.frame(returns_stk)
+
+```
+
+```{r}
+beta_AA = lm(AA ~ DOW, data = return_stocks)$coef[2]
+beta_AXP = lm(AXP ~ DOW, data = return_stocks)$coef[2]
+beta_BA = lm(BA ~ DOW, data = return_stocks)$coef[2]
+beta_BAC = lm(BAC ~ DOW, data = return_stocks)$coef[2]
+beta_CAT = lm(CAT ~ DOW, data = return_stocks)$coef[2]
+beta_CSCO = lm(CSCO ~ DOW, data = return_stocks)$coef[2]
+beta_CVX = lm(CVX ~ DOW, data = return_stocks)$coef[2]
+beta_DD = lm(DD ~ DOW, data = return_stocks)$coef[2]
+beta_DIS = lm(DIS ~ DOW, data = return_stocks)$coef[2]
+beta_GE = lm(GE ~ DOW, data = return_stocks)$coef[2]
+beta_HD = lm(HD ~ DOW, data = return_stocks)$coef[2]
+beta_HPQ = lm(HPQ ~ DOW, data = return_stocks)$coef[2]
+beta_IBM = lm(IBM ~ DOW, data = return_stocks)$coef[2]
+beta_INTC = lm(INTC ~ DOW, data = return_stocks)$coef[2]
+beta_JNJ = lm(JNJ ~ DOW, data = return_stocks)$coef[2]
+beta_JPM = lm(JPM ~ DOW, data = return_stocks)$coef[2]
+beta_KRFT = lm(KRFT ~ DOW, data = return_stocks)$coef[2]
+beta_KO = lm(KO ~ DOW, data = return_stocks)$coef[2]
+beta_MCD = lm(MCD ~ DOW, data = return_stocks)$coef[2]
+beta_MMM = lm(MMM ~ DOW, data = return_stocks)$coef[2]
+beta_MRK = lm(MRK ~ DOW, data = return_stocks)$coef[2]
+beta_MSFT = lm(MSFT ~ DOW, data = return_stocks)$coef[2]
+beta_PFE = lm(PFE ~ DOW, data = return_stocks)$coef[2]
+beta_PG = lm(PG ~ DOW, data = return_stocks)$coef[2]
+beta_T = lm(`T` ~ DOW, data = return_stocks)$coef[2]
+beta_TRV = lm(TRV ~ DOW, data = return_stocks)$coef[2]
+beta_UTX = lm(UTX ~ DOW, data = return_stocks)$coef[2]
+beta_VZ = lm(VZ ~ DOW, data = return_stocks)$coef[2]
+beta_WMT = lm(WMT ~ DOW, data = return_stocks)$coef[2]
+beta_XOM = lm(XOM ~ DOW, data = return_stocks)$coef[2]
+
+df_capm = data.frame(Stock = c("AA", "AXP", "BA", "BAC", "CAT", "CSCO", "CVX", "DD", "DIS", "GE",
+                           "HD", "HPQ", "IBM", "INTC", "JNJ", "JPM", "KRFT", "KO", "MCD", "MMM",
+                           "MRK", "MSFT", "PFE", "PG", "T", "TRV", "UTX", "VZ", "WMT", "XOM"),
+                 Beta = c(beta_AA, beta_AXP, beta_BA, beta_BAC, beta_CAT, beta_CSCO,
+                          beta_CVX, beta_DD, beta_DIS, beta_GE, beta_HD, beta_HPQ, beta_IBM,
+                          beta_INTC, beta_JNJ, beta_JPM, beta_KRFT, beta_KO, beta_MCD,
+                          beta_MMM, beta_MRK, beta_MSFT, beta_PFE, beta_PG, beta_T, beta_TRV,
+                          beta_UTX, beta_VZ, beta_WMT, beta_XOM)) 
+df_capm <- data.frame(df_capm, Return =returns_stk$return)
+df_capm %>% 
+  arrange(-desc(Beta)) %>% 
+  mutate(Return = scales::percent(Return))
+View(df_capm)
+```
+### Scatter Plots
+
+```{r}
+PlotAxis = CNamesFunction(DJI1)
+```
+
+```{r}
+ScatterFunction <- function(column, var_name) 
+{
+  plot(DJI1$percent_change_next_weeks_price, column, main="Next Week Percent Change Scatterplot",
+   xlab="Percent Change in Next Weeks Price ", ylab = var_name, pch=19)
+}
+```
+
+```{r}
+for(i in PlotAxis)
+{ 
+data = DJI1[[i]]  
+ ScatterFunction(data,i)
+}
+```
+
+
+
+The data frame above holds the beta and returns of each individual stock. Analysis of these metrics can help investors assess whether these companies are good investments relative to the broader Dow Jones Index.
+
+# Findings
+
+All 3 models performed accurately and produced very interesting results. Below are the RMSEs of each model:
+
+*Linear Regression*
+RMSE: 3.29
+
+*SVM*
+RMSE: 3.38
+
+*Decision Tree*
+RMSE: 3.47
+
+Overall, the RMSE values of the three models do not vary greatly, but the Linear Regression did have the lowest RMSE of the three. The Decision Tree had the highest RMSE value of the three, at 3.47. The data itself was relatively clean, and so there are no relevant concerns in terms of bad data or flawed samples. In the end, the models serve as predictions and may not predict stock price changes with complete accuracy. Investors should be wary of this, and invest their money with great care and due dilligence according to their risk profile and investment goals. 
+
+# Best Predictors
+
+# Assumptions & Limitations
+
+Let's take a look at the overall assumptions and limitations of each model to determine which model might be the most appropriate under certain circumstances:
+
+SVM models are extremely versatile classification models. SVM has various advantages:
+
+* Effective on data-sets with multiple features
+* Effective in data-sets where number of features > number of observations
+* Can leverage different kernels for data that is not linear
+
+However, they do have some limitations and disadvantages:
+
+* Model is hard to interpret due to the inability of providing probabilities
+* Works best on smaller data-sets due to its high training time
+* Can be computationally expensive to run for large and complex data-sets
+
+
+Linear regression is a foundational statistical method for modeling relationships between a dependent variable and one or more independent variables. The advantages of linear regression include:
+
+* Simplicity and interpretability, making it easy to understand the relationship between variables
+* Efficiency in terms of computation, allowing it to handle large data sets quickly
+* Usefulness in predicting outcomes and trends based on historical data
+
+Despite its advantages, linear regression also has its limitations and disadvantages:
+
+* Assumes a linear relationship between dependent and independent variables, which might not always be the case
+* Sensitive to outliers, which can significantly affect the slope of the regression line
+* Prone to underfitting when the data is complex or non-linear, leading to poor predictive performance
+
+Decision trees are popular for classification and regression tasks due to their intuitive representation of decision processes. The advantages of decision trees include:
+
+Easy to understand and interpret, making them useful for decision analysis
+* Capable of handling both numerical and categorical data
+* Do not require extensive data pre-processing, such as normalization or scaling
+
+However, decision trees are not without their drawbacks, including:
+
+Prone to overfitting, especially with complex trees, which can reduce model generalizability
+* Can become unstable with small changes in the data, leading to significantly different tree structures
+* Biased towards classes with more levels; this can lead to biased trees if one class dominates
+
+# Optimal model for this case
+
+In terms of this case report, the optimal model chosen according to the results is probably the SVM model. Even though the RMSE was not as low as the Linear Regression, the model itself does a better job of considering the categorical and continuous variables and the computing power of SVMs is much greater. If this model were to be optimized for a larger data-set, it would handle and process the data more effectively than the Linear Regression and Decision Trees.
