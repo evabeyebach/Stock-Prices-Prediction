@@ -56,13 +56,12 @@ We predict on traing and evaluate on testing. We aim to choose the model that is
 
 
 ## Conclusion
-After cleaning and exploring the data, we performed three different models (linear regression, SVR, and Decision Trees) and the aim was to get the best model in predicting
-`percent_change_next_weeks_price` based on the independent variables. The Linear Regression model exhibited the most precise predictions with an RMSE of 3.29, 
-marginally outperforming the SVM and Decision Tree models, which recorded RMSEs of 3.38 and 3.47, respectively. The Linear Model also helped eliminate collinearity 
-issues between independent variables and helped us determine the inputs for generating the final three models. Even though the RMSE for the linear model was the lowest,
-we decided to choose the SVM model. The model itself does a better job of considering the categorical and continuous variables and the computing power of SVMs is much greater.
-CAPM was also utilized in this case study to assess the given stocks' risk compared to the market and get the best return for each stock. After getting all beta and return results, 
-we chose KO, MCD, and MRK to be the best stocks. They all had a beta lower than 1 (less risky than the market) and better returns than the other stocks.
+The Linear Regression model exhibited the most precise predictions with an **RMSE of 3.29**, 
+marginally outperforming the SVM and Decision Tree models, which recorded **RMSEs of 3.38 and 3.47**, respectively. Even though the RMSE for the linear model was the lowest,
+we decided to choose the **SVM** model. 
+The model itself does a better job of considering the categorical and continuous variables and the computing power of SVMs is much greater.
+**CAPM** was also utilized in this case study to assess the given stocks' risk compared to the market and get the best return for each stock. After getting all beta and return results, 
+we chose **KO**, **MCD**, and **MRK** to be the best stocks. They all had a beta lower than 1 (less risky than the market) and better returns than the other stocks.
 
 
 
