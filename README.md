@@ -13,6 +13,7 @@ We built models to predict stock prices and evaluate risks of stocks in the Daw 
 appropriateness of model and insights from findings as well as prediction accuracy. We also used CAPM to get the risk of stocks.
 
 ## Data
+
 • quarter: the yearly quarter (1 = Jan-Mar; 2 = Apr=Jun).
 • stock: the stock symbol.
 • date: the last business day of the work (this is typically a Friday)
